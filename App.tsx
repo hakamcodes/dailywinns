@@ -23,14 +23,32 @@ import LoginScreen from './LoginScreen';
 import AdminView from './AdminView';
 import { registerUserProfile, initNewUser } from './userRegistry';
 import { db } from './firebase';
-import { doc, getDoc, setDoc, deleteDoc, getDocs, collection, Timestamp, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { doc, getDoc, setDoc, deleteDoc, getDocs, collection, Timestamp, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 
-const MASTER_PASSWORD = "#Ekam@36054";
+// Master password stored as SHA-256 hash — plain text never in source or bundle
+const MASTER_HASH = "4acf8021e112b89ba649273b85830a2f5c9139d5748ea2d0fd73f68e095db406";
 const ADMIN_EMAIL = 'hakamsinghlodhi674@gmail.com';
+
+async function hashPassword(input: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function isMasterPassword(input: string): Promise<boolean> {
+  try {
+    const h = await hashPassword(input);
+    return h === MASTER_HASH;
+  } catch {
+    return false;
+  }
+}
 
 const App: React.FC = () => {
   const { user, authLoading, signOutUser } = useAuth();
   const [dataLoaded, setDataLoaded] = useState(false);
+  const [galleryLoaded, setGalleryLoaded] = useState(false);
+  const [aboutLoaded, setAboutLoaded] = useState(false);
+  const [logsFullyLoaded, setLogsFullyLoaded] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
   const isAdmin = user?.email === ADMIN_EMAIL;
   const prevLogsRef = useRef<DailyLog[]>([]);
@@ -67,6 +85,11 @@ const App: React.FC = () => {
   const [lastReadAt, setLastReadAt] = useState<number>(0); // epoch ms
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [dismissedGlobalIds, setDismissedGlobalIds] = useState<string[]>([]);
+  const dismissedGlobalIdsRef = useRef<string[]>([]);
+  const updateDismissedIds = (ids: string[]) => {
+    dismissedGlobalIdsRef.current = ids;
+    setDismissedGlobalIds(ids);
+  };
   const [selectedHabitForCalendar, setSelectedHabitForCalendar] = useState<Habit | null>(null);
   const [isScoreBreakdownOpen, setIsScoreBreakdownOpen] = useState(false);
   const [isTodoModalOpen, setIsTodoModalOpen] = useState(false);
@@ -154,7 +177,7 @@ const App: React.FC = () => {
         schoolName: "Your School / University",
         collegeName: "Your College / University",
         theme: 'system',
-        profilePicture: undefined
+        profilePicture: null
     };
 
     return defaultSettings;
@@ -241,6 +264,7 @@ const App: React.FC = () => {
   const migrateLog = (log: any): DailyLog => {
     if (!log.breathingSessions) log.breathingSessions = 0;
     if (!log.skincare) log.skincare = { morning: false, afternoon: false, night: false };
+    if (!log.meals) log.meals = { breakfast: false, lunch: false, dinner: false, notes: '' };
     if (!log.energyLevels) log.energyLevels = { morning: 0, afternoon: 0, evening: 0, night: 0 };
     if (!log.redeemedRewards) log.redeemedRewards = [];
     if (!log.completedHabits) log.completedHabits = [];
@@ -288,6 +312,9 @@ const App: React.FC = () => {
     }));
     setIsAppLocked(false);
     setDataLoaded(false);
+    setGalleryLoaded(false);
+    setAboutLoaded(false);
+    setLogsFullyLoaded(false);
 
     // If logged out — state is clean, nothing more to do
     if (!user) { setNotifications([]); setLastReadAt(0); return; }
@@ -312,8 +339,8 @@ const App: React.FC = () => {
         .map(d => ({ id: 'g_' + d.id, ...d.data() } as AppNotification))
         // Only show global notifications created AFTER this user joined
         .filter(n => (n.createdAt?.toMillis() || 0) >= userJoinedMs - 60000) // 1 min grace
-        // Filter out ones the user has dismissed
-        .filter(n => !dismissedGlobalIds.includes(n.id));
+        // Filter out ones the user has dismissed (use ref so closure always sees latest)
+        .filter(n => !dismissedGlobalIdsRef.current.includes(n.id));
 
       const all: AppNotification[] = [
         ...(welcomeNotif ? [welcomeNotif] : []),
@@ -342,48 +369,88 @@ const App: React.FC = () => {
     getDoc(doc(db, 'users', user.uid, 'appData', 'notifMeta')).then(snap => {
       if (snap.exists()) {
         setLastReadAt(snap.data().lastReadAt || 0);
-        setDismissedGlobalIds(snap.data().dismissedGlobalIds || []);
+        updateDismissedIds(snap.data().dismissedGlobalIds || []);
+        // Re-run mergeAndSet now that dismissedIds are loaded — fixes race condition
+        // where onSnapshot fired before dismissedIds were populated from Firestore
+        mergeAndSet(globalCache, welcomeCache);
       }
     }).catch(() => {});
 
     // Load this user's data from Firestore
     const loadData = async () => {
       try {
+        // ── Settings (critical — load first) ──────────────────
         const settingsSnap = await getDoc(doc(db, 'users', user.uid, 'appData', 'settings'));
         if (settingsSnap.exists()) {
           const saved = settingsSnap.data() as AppSettings;
           setSettings(prev => ({ ...prev, ...saved, skills: saved.skills || prev.skills }));
           if (saved.isAppLockEnabled) setIsAppLocked(true);
         } else {
-          // New user — pre-fill name from Google account
+          // Brand new user — write settings IMMEDIATELY so next refresh finds it
           const googleName = user.displayName || '';
-          if (googleName) {
-            setSettings(prev => ({ ...prev, userName: googleName }));
-          }
-          // Seed createdAt + welcome notification (non-critical, silent)
+          const firstName = googleName.split(' ')[0] || googleName;
+          const newSettings: AppSettings = {
+            waterTargets: { daily: 2.5, weekly: 17.5, monthly: 75 },
+            studyTargets: { daily: 4, weekly: 28, monthly: 120 },
+            exerciseTargets: { daily: 30, weekly: 210, monthly: 900 },
+            screenTimeTargets: { daily: 4, weekly: 28, monthly: 120 },
+            showImportance: true, obfuscationEnabled: false,
+            settingsPassword: 'user@123', isAppLockEnabled: false, appLockPassword: '',
+            rewards: [
+              { id: 'default-ig', name: '30 min Instagram', points: 50, emoji: '📸' },
+              { id: 'default-game', name: '1 Hour Gaming', points: 100, emoji: '🎮' },
+              { id: 'default-snack', name: 'Cheat Snack', points: 80, emoji: '🍫' }
+            ],
+            habits: [
+              { id: 'h1', name: 'Morning Meditation', emoji: '🧘', createdAt: new Date().toISOString().split('T')[0], points: 5 },
+              { id: 'h2', name: 'Read 10 Pages', emoji: '📖', createdAt: new Date().toISOString().split('T')[0], points: 5 }
+            ],
+            customActivities: [], deadlines: [], skills: [],
+            expenseCategories: ['Clg fees', 'Study expenses', 'Transport', 'Other expenses'],
+            userName: firstName || 'Your Name',
+            schoolName: 'Your School / University', collegeName: 'Your College / University',
+            theme: 'system', profilePicture: null
+          };
+          // Write immediately — prevents "new user" detection on refresh
+          await setDoc(doc(db, 'users', user.uid, 'appData', 'settings'), newSettings);
+          setSettings(newSettings);
           initNewUser(user).catch(() => {});
         }
 
-        const aboutSnap = await getDoc(doc(db, 'users', user.uid, 'appData', 'aboutMe'));
-        if (aboutSnap.exists()) setAboutMeData(aboutSnap.data() as AboutMeData);
-
+        // ── Sticky notes (small, load immediately) ────────────
         const notesSnap = await getDoc(doc(db, 'users', user.uid, 'appData', 'stickyNotes'));
         if (notesSnap.exists()) setStickyNotes(notesSnap.data().items || []);
 
-        const logsSnap = await getDocs(collection(db, 'users', user.uid, 'logs'));
-        const loadedLogs = logsSnap.docs.map(d => migrateLog(d.data()));
-        prevLogsRef.current = loadedLogs;
-        setLogs(loadedLogs);
+        // ── Logs: load last 35 days first (covers streaks + today) ──
+        const recentLogsQuery = query(
+          collection(db, 'users', user.uid, 'logs'),
+          orderBy('date', 'desc'),
+          limit(35)
+        );
+        const recentSnap = await getDocs(recentLogsQuery);
+        const recentLogs = recentSnap.docs.map(d => migrateLog(d.data()));
+        prevLogsRef.current = recentLogs;
+        setLogs(recentLogs);
 
-        const gallerySnap = await getDocs(collection(db, 'users', user.uid, 'gallery'));
-        const loadedGallery = gallerySnap.docs.map(d => d.data() as GalleryItem);
-        prevGalleryRef.current = loadedGallery;
-        setGallery(loadedGallery);
+        // App is usable now — show it
+        setDataLoaded(true);
+
+        // ── Load rest of logs in background (for Trends/Review/Score) ──
+        const allLogsSnap = await getDocs(collection(db, 'users', user.uid, 'logs'));
+        const allLogs = allLogsSnap.docs.map(d => migrateLog(d.data()));
+        if (allLogs.length > recentLogs.length) {
+          prevLogsRef.current = allLogs;
+          setLogs(allLogs);
+        }
+        setLogsFullyLoaded(true);
+
+        // ── About me: lazy (loaded when About tab opened) ─────
+        // ── Gallery: lazy (loaded when Gallery tab opened) ────
+        // Both are loaded via loadGallery() / loadAbout() on tab open
 
       } catch (e) {
         console.error('Failed to load data from Firestore', e);
-      } finally {
-        setDataLoaded(true);
+        setDataLoaded(true); // show app even on error
       }
     };
 
@@ -396,6 +463,34 @@ const App: React.FC = () => {
       }));
     });
   }, [user]);
+
+  // --- Lazy loader: Gallery (load only when tab first opened) ---
+  useEffect(() => {
+    if (!user || !dataLoaded || galleryLoaded || view !== 'gallery') return;
+    const loadGallery = async () => {
+      try {
+        const snap = await getDocs(collection(db, 'users', user.uid, 'gallery'));
+        const items = snap.docs.map(d => d.data() as GalleryItem);
+        prevGalleryRef.current = items;
+        setGallery(items);
+      } catch {}
+      setGalleryLoaded(true);
+    };
+    loadGallery();
+  }, [view, user, dataLoaded, galleryLoaded]);
+
+  // --- Lazy loader: About Me (load only when tab first opened) ---
+  useEffect(() => {
+    if (!user || !dataLoaded || aboutLoaded || view !== 'about') return;
+    const loadAbout = async () => {
+      try {
+        const snap = await getDoc(doc(db, 'users', user.uid, 'appData', 'aboutMe'));
+        if (snap.exists()) setAboutMeData(snap.data() as AboutMeData);
+      } catch {}
+      setAboutLoaded(true);
+    };
+    loadAbout();
+  }, [view, user, dataLoaded, aboutLoaded]);
 
   // --- Auto Summary Logic ---
   useEffect(() => {
@@ -425,23 +520,22 @@ const App: React.FC = () => {
   }, [isIdentityModalOpen, settings]);
 
   // --- Firestore Persistence ---
-  // Save settings (debounced 800ms)
+  // Save settings immediately — no debounce so name changes never lost on refresh
   useEffect(() => {
     if (!user || !dataLoaded) return;
-    const t = setTimeout(() => {
-      setDoc(doc(db, 'users', user.uid, 'appData', 'settings'), settings);
-    }, 800);
-    return () => clearTimeout(t);
+    setDoc(doc(db, 'users', user.uid, 'appData', 'settings'), settings)
+      .catch(e => console.warn('Settings save failed:', e));
   }, [settings, user, dataLoaded]);
 
-  // Save about me (debounced 800ms)
+  // Save about me (only after it was actually loaded, prevent overwriting with defaults)
   useEffect(() => {
-    if (!user || !dataLoaded) return;
+    if (!user || !dataLoaded || !aboutLoaded) return;
     const t = setTimeout(() => {
-      setDoc(doc(db, 'users', user.uid, 'appData', 'aboutMe'), aboutMeData);
-    }, 800);
+      setDoc(doc(db, 'users', user.uid, 'appData', 'aboutMe'), aboutMeData)
+        .catch(e => console.warn('AboutMe save failed:', e));
+    }, 500);
     return () => clearTimeout(t);
-  }, [aboutMeData, user, dataLoaded]);
+  }, [aboutMeData, user, dataLoaded, aboutLoaded]);
 
   // Save sticky notes (debounced 800ms)
   useEffect(() => {
@@ -469,7 +563,7 @@ const App: React.FC = () => {
 
   // Save gallery — only changed/new items (per-item documents)
   useEffect(() => {
-    if (!user || !dataLoaded) return;
+    if (!user || !dataLoaded || !galleryLoaded) return;
     // Delete removed items
     prevGalleryRef.current.forEach(item => {
       if (!gallery.find(g => g.id === item.id)) {
@@ -833,10 +927,10 @@ const App: React.FC = () => {
         customActivities: [], deadlines: [], skills: [],
         expenseCategories: ['Clg fees', 'Study expenses', 'Transport', 'Other expenses'],
         isAppLockEnabled: false,
-        userName: user.displayName || 'Your Name',
+        userName: (user.displayName || '').split(' ')[0] || 'Your Name',
         schoolName: 'Your School / University',
         collegeName: 'Your College / University',
-        profilePicture: undefined,  // clear profile picture
+        profilePicture: null,  // clear profile picture
       }));
       setIsAppLocked(false);
       alert('All data destroyed. Your app is now reset to a clean state.');
@@ -867,7 +961,7 @@ const App: React.FC = () => {
       } else if (notif.id.startsWith('g_')) {
         // Global broadcast — store dismissed ID in user's notifMeta so it persists
         const newDismissed = [...dismissedGlobalIds, notif.id];
-        setDismissedGlobalIds(newDismissed);
+        updateDismissedIds(newDismissed);
         await setDoc(
           doc(db, 'users', user.uid, 'appData', 'notifMeta'),
           { dismissedGlobalIds: newDismissed },
@@ -1010,7 +1104,7 @@ const App: React.FC = () => {
       const rows = filteredLogsForReport.map(l => {
         const water = l.waterEntries.reduce((a, c) => a + c.amount, 0);
         const study = l.studySessions.reduce((a, c) => a + c.duration, 0);
-        const exercise = l.exerciseEntries.reduce((a, c) => a + c.duration, 0);
+        const exercise = (l.exerciseEntries || []).reduce((a, c) => a + c.duration, 0);
         const screenTime = (l.screenTimeHours + l.screenTimeMinutes / 60).toFixed(2);
         const sleep = (l.sleepHours + l.sleepMinutes / 60).toFixed(2);
         const score = calculateLogPoints(l, settings, logs);
@@ -1040,215 +1134,369 @@ const App: React.FC = () => {
     if (filteredLogsForReport.length === 0) return;
 
     const esc = (s: any) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const n = filteredLogsForReport.length;
 
-    // Build one section per day
-    const dayPages = filteredLogsForReport.map((l, i) => {
-      const water = l.waterEntries.reduce((a,c)=>a+c.amount,0).toFixed(2);
+    // ── Summary stats for cover page ──────────────────────────
+    const totalStudyMins  = filteredLogsForReport.reduce((a,l)=>a+l.studySessions.reduce((s,c)=>s+c.duration,0),0);
+    const totalExerciseMins = filteredLogsForReport.reduce((a,l)=>a+(l.exerciseEntries?.reduce((s,c)=>s+c.duration,0)||0),0);
+    const totalWaterL     = filteredLogsForReport.reduce((a,l)=>a+l.waterEntries.reduce((s,c)=>s+c.amount,0),0);
+    const totalWorkouts   = filteredLogsForReport.reduce((a,l)=>a+(l.exerciseEntries?.length||0),0);
+    const totalAchievements = filteredLogsForReport.filter(l=>l.achievement?.trim()).length;
+    const avgScore  = (filteredLogsForReport.reduce((a,l)=>a+calculateLogPoints(l,settings,logs),0)/n).toFixed(0);
+    const avgMood   = (filteredLogsForReport.reduce((a,l)=>a+l.mood,0)/n).toFixed(1);
+    const avgSleep  = (filteredLogsForReport.reduce((a,l)=>a+(l.sleepHours+l.sleepMinutes/60),0)/n).toFixed(1);
+    const avgWater  = (totalWaterL/n).toFixed(1);
+    const avgPeace  = (filteredLogsForReport.reduce((a,l)=>a+l.peaceLevel,0)/n).toFixed(1);
+    const avgRating = (filteredLogsForReport.reduce((a,l)=>a+l.dayRating,0)/n).toFixed(1);
+    const avgStudyH = (totalStudyMins/n/60).toFixed(1);
+    const avgExerciseMin = (totalExerciseMins/n).toFixed(0);
+
+    // ── Day pages ──────────────────────────────────────────────
+    const dayPages = filteredLogsForReport.map((l) => {
+      const waterL    = l.waterEntries.reduce((a,c)=>a+c.amount,0).toFixed(1);
       const studyMins = l.studySessions.reduce((a,c)=>a+c.duration,0);
-      const exerciseMins = l.exerciseEntries.reduce((a,c)=>a+c.duration,0);
-      const sleep = (l.sleepHours + l.sleepMinutes/60).toFixed(1);
-      const score = calculateLogPoints(l, settings, logs);
-      const habits = settings.habits.filter(h=>l.completedHabits?.includes(h.id)).map(h=>`${h.emoji} ${h.name}`).join('  ·  ') || '—';
-      const pillarsActive = Object.entries(l.happinessPillars||{}).filter(([,v])=>v).map(([k])=>k).join(', ') || '—';
-      const studySubs = l.studySessions.map(s=>`${s.subject} (${s.duration}m)`).join(', ') || '—';
-      const exerciseTypes = l.exerciseEntries.map(e=>`${e.type} (${e.duration}m)`).join(', ') || '—';
-      const meals = [l.meals?.breakfast&&'Breakfast', l.meals?.lunch&&'Lunch', l.meals?.dinner&&'Dinner'].filter(Boolean).join(', ') || '—';
-      const skincare = [l.skincare?.morning&&'Morning',l.skincare?.afternoon&&'Afternoon',l.skincare?.night&&'Night'].filter(Boolean).join(', ') || '—';
-      const social = (l.social||[]).join(', ') || '—';
-      const selfCare = (l.selfCare||[]).join(', ') || '—';
-      const distractions = (l.distractions||[]).join(', ') || '—';
-      const energy = l.energyLevels ? `M:${l.energyLevels.morning||0} A:${l.energyLevels.afternoon||0} E:${l.energyLevels.evening||0} N:${l.energyLevels.night||0}` : '—';
-      const screenTime = `${l.screenTimeHours||0}h ${l.screenTimeMinutes||0}m`;
-      const isLast = i === filteredLogsForReport.length - 1;
+      const exMins    = l.exerciseEntries?.reduce((a,c)=>a+c.duration,0)||0;
+      const sleepH    = (l.sleepHours + l.sleepMinutes/60).toFixed(1);
+      const score     = calculateLogPoints(l, settings, logs);
+      const dateObj   = new Date(l.date + 'T12:00:00');
+      const dayName   = dateObj.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+      const habitsText = settings.habits.filter(h=>l.completedHabits?.includes(h.id)).map(h=>`${h.emoji} ${h.name}`).join(' · ') || '—';
+      const studyText  = l.studySessions.map(s=>`${esc(s.subject)} (${s.duration}m)`).join(', ') || '—';
+      const exText     = l.exerciseEntries?.map(e=>`${esc(e.type)} (${e.duration}m)`).join(', ') || '—';
+      const mealsText  = [l.meals?.breakfast&&'Breakfast',l.meals?.lunch&&'Lunch',l.meals?.dinner&&'Dinner'].filter(Boolean).join(', ')||'—';
+      const energyText = l.energyLevels ? `Morning ${l.energyLevels.morning||0}/10 · Afternoon ${l.energyLevels.afternoon||0}/10 · Evening ${l.energyLevels.evening||0}/10 · Night ${l.energyLevels.night||0}/10` : '—';
+      const skincareText = [l.skincare?.morning&&'Morning',l.skincare?.afternoon&&'Afternoon',l.skincare?.night&&'Night'].filter(Boolean).join(', ')||'—';
+
+      const journals = [
+        l.goalText    && { label:'🎯 Goal for the day',  text: l.goalText,     cls:'goal' },
+        l.achievement && { label:'🏆 Achievement',       text: l.achievement,  cls:'achieve' },
+        l.newLearning && { label:'💡 New Learning',      text: l.newLearning,  cls:'learn' },
+        l.gratitude   && { label:'🙏 Gratitude',         text: l.gratitude,    cls:'gratitude' },
+        l.journal     && { label:'📖 Journal',           text: l.journal,      cls:'journal' },
+        l.negativeThought && { label:'💭 Thought Reframe', text: l.negativeThought, cls:'reframe' },
+        l.mindDump    && { label:'🧠 Mind Dump',         text: l.mindDump,     cls:'mind' },
+      ].filter(Boolean) as {label:string;text:string;cls:string}[];
 
       return `
-      <div class="day-page${isLast ? '' : ' page-break'}">
-        <!-- Day Header -->
-        <div class="day-header">
-          <div class="day-header-left">
-            <div class="day-date">${esc(l.date)}</div>
-            <div class="day-name">${new Date(l.date + 'T12:00:00').toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
-          </div>
-          <div class="score-badge">${score}<span class="score-label">pts</span></div>
-        </div>
+<div class="day-page">
+  <div class="day-header">
+    <div>
+      <div class="day-name">${esc(dayName)}</div>
+    </div>
+    <div class="score-pill">${score} <span class="pts">pts</span></div>
+  </div>
 
-        <!-- Quick Stats Row -->
-        <div class="stats-row">
-          <div class="stat"><div class="stat-icon">🌙</div><div class="stat-val">${sleep}h</div><div class="stat-lbl">Sleep</div></div>
-          <div class="stat"><div class="stat-icon">💧</div><div class="stat-val">${water}L</div><div class="stat-lbl">Water</div></div>
-          <div class="stat"><div class="stat-icon">📚</div><div class="stat-val">${studyMins}m</div><div class="stat-lbl">Study</div></div>
-          <div class="stat"><div class="stat-icon">🏃</div><div class="stat-val">${exerciseMins}m</div><div class="stat-lbl">Exercise</div></div>
-          <div class="stat"><div class="stat-icon">😊</div><div class="stat-val">${l.mood}/10</div><div class="stat-lbl">Mood</div></div>
-          <div class="stat"><div class="stat-icon">☮️</div><div class="stat-val">${l.peaceLevel}/10</div><div class="stat-lbl">Peace</div></div>
-          <div class="stat"><div class="stat-icon">⭐</div><div class="stat-val">${l.dayRating}/10</div><div class="stat-lbl">Day Rating</div></div>
-          <div class="stat"><div class="stat-icon">🎯</div><div class="stat-val">${l.goalsCompleted}%</div><div class="stat-lbl">Goals</div></div>
-        </div>
+  <div class="metrics-grid">
+    <div class="metric"><div class="metric-icon">🌙</div><div class="metric-val">${sleepH}h</div><div class="metric-lbl">Sleep</div></div>
+    <div class="metric"><div class="metric-icon">💧</div><div class="metric-val">${waterL}L</div><div class="metric-lbl">Water</div></div>
+    <div class="metric"><div class="metric-icon">📚</div><div class="metric-val">${studyMins}m</div><div class="metric-lbl">Study</div></div>
+    <div class="metric"><div class="metric-icon">🏃</div><div class="metric-val">${exMins}m</div><div class="metric-lbl">Exercise</div></div>
+    <div class="metric"><div class="metric-icon">😊</div><div class="metric-val">${l.mood}/10</div><div class="metric-lbl">Mood</div></div>
+    <div class="metric"><div class="metric-icon">☮️</div><div class="metric-val">${l.peaceLevel}/10</div><div class="metric-lbl">Peace</div></div>
+    <div class="metric"><div class="metric-icon">⭐</div><div class="metric-val">${l.dayRating}/10</div><div class="metric-lbl">Day Rating</div></div>
+    <div class="metric"><div class="metric-icon">🎯</div><div class="metric-val">${l.goalsCompleted||0}%</div><div class="metric-lbl">Goals Done</div></div>
+  </div>
 
-        <!-- Two column detail -->
-        <div class="detail-grid">
-          <div class="detail-col">
-            <div class="detail-section">
-              <div class="section-title">📅 Schedule</div>
-              <div class="row"><span class="lbl">Wake Up</span><span class="val">${esc(l.wakeUpTime||'—')}</span></div>
-              <div class="row"><span class="lbl">Sleep Start</span><span class="val">${esc(l.sleepStart||'—')}</span></div>
-              <div class="row"><span class="lbl">Sleep End</span><span class="val">${esc(l.sleepEnd||'—')}</span></div>
-              <div class="row"><span class="lbl">Bedtime</span><span class="val">${esc(l.bedtime||'—')}</span></div>
-            </div>
-            <div class="detail-section">
-              <div class="section-title">🍽️ Nutrition</div>
-              <div class="row"><span class="lbl">Meals</span><span class="val">${esc(meals)}</span></div>
-              <div class="row"><span class="lbl">Nutrition Score</span><span class="val">${esc(l.nutritionScore||'—')}</span></div>
-              <div class="row"><span class="lbl">Junk Food</span><span class="val">${l.junkFood||0} serving(s)${l.junkFoodNotes?' — '+esc(l.junkFoodNotes):''}</span></div>
-              ${l.meals?.notes ? `<div class="row"><span class="lbl">Meal Notes</span><span class="val">${esc(l.meals.notes)}</span></div>` : ''}
-            </div>
-            <div class="detail-section">
-              <div class="section-title">📱 Screen & Activity</div>
-              <div class="row"><span class="lbl">Screen Time</span><span class="val">${screenTime}${l.screenTimeNotes?' — '+esc(l.screenTimeNotes):''}</span></div>
-              <div class="row"><span class="lbl">Energy (M/A/E/N)</span><span class="val">${energy}</span></div>
-              <div class="row"><span class="lbl">Self Care</span><span class="val">${esc(selfCare)}</span></div>
-              <div class="row"><span class="lbl">Skincare</span><span class="val">${esc(skincare)}</span></div>
-              <div class="row"><span class="lbl">Social</span><span class="val">${esc(social)}</span></div>
-              <div class="row"><span class="lbl">Breathing Sessions</span><span class="val">${l.breathingSessions||0}</span></div>
-            </div>
-          </div>
-          <div class="detail-col">
-            <div class="detail-section">
-              <div class="section-title">📚 Study Sessions</div>
-              <div class="row full"><span class="val">${esc(studySubs)}</span></div>
-            </div>
-            <div class="detail-section">
-              <div class="section-title">🏃 Exercise</div>
-              <div class="row full"><span class="val">${esc(exerciseTypes)}</span></div>
-            </div>
-            <div class="detail-section">
-              <div class="section-title">🔥 Habits Completed</div>
-              <div class="row full"><span class="val">${esc(habits)}</span></div>
-            </div>
-            <div class="detail-section">
-              <div class="section-title">🌈 Happiness Pillars</div>
-              <div class="row full"><span class="val">${esc(pillarsActive)}</span></div>
-            </div>
-            <div class="detail-section">
-              <div class="section-title">🎯 Today's Goal</div>
-              <div class="row full"><span class="val">${esc(l.goalText||'—')}</span></div>
-            </div>
-            <div class="detail-section">
-              <div class="section-title">📵 Distractions</div>
-              <div class="row full"><span class="val">${esc(distractions)}</span></div>
-            </div>
-          </div>
-        </div>
+  <div class="sections-grid">
+    <div class="section">
+      <div class="sec-title">Schedule</div>
+      <div class="sec-row"><span class="sec-lbl">Wake Up</span><span class="sec-val">${esc(l.wakeUpTime||'—')}</span></div>
+      <div class="sec-row"><span class="sec-lbl">Sleep</span><span class="sec-val">${esc(l.sleepStart||'—')} → ${esc(l.sleepEnd||'—')}</span></div>
+      <div class="sec-row"><span class="sec-lbl">Bedtime</span><span class="sec-val">${esc(l.bedtime||'—')}</span></div>
+      <div class="sec-row"><span class="sec-lbl">Screen Time</span><span class="sec-val">${l.screenTimeHours||0}h ${l.screenTimeMinutes||0}m</span></div>
+    </div>
+    <div class="section">
+      <div class="sec-title">Nutrition</div>
+      <div class="sec-row"><span class="sec-lbl">Meals</span><span class="sec-val">${esc(mealsText)}</span></div>
+      <div class="sec-row"><span class="sec-lbl">Quality</span><span class="sec-val">${esc(l.nutritionScore||'—')}</span></div>
+      <div class="sec-row"><span class="sec-lbl">Junk Food</span><span class="sec-val">${l.junkFood||0} serving(s)</span></div>
+      <div class="sec-row"><span class="sec-lbl">Skincare</span><span class="sec-val">${esc(skincareText)}</span></div>
+    </div>
+  </div>
 
-        <!-- Journal sections -->
-        ${l.achievement ? `<div class="journal-block achievement"><div class="journal-label">🏆 Achievement</div><div class="journal-text">${esc(l.achievement)}</div></div>` : ''}
-        ${l.newLearning ? `<div class="journal-block learning"><div class="journal-label">💡 New Learning</div><div class="journal-text">${esc(l.newLearning)}</div></div>` : ''}
-        ${l.gratitude ? `<div class="journal-block gratitude"><div class="journal-label">🙏 Gratitude</div><div class="journal-text">${esc(l.gratitude)}</div></div>` : ''}
-        ${l.journal ? `<div class="journal-block journal"><div class="journal-label">📖 Daily Journal</div><div class="journal-text">${esc(l.journal)}</div></div>` : ''}
-        ${l.negativeThought ? `<div class="journal-block negative"><div class="journal-label">💭 Reframe</div><div class="journal-text">${esc(l.negativeThought)}</div></div>` : ''}
-        ${l.mindDump ? `<div class="journal-block minddump"><div class="journal-label">🧠 Mind Dump</div><div class="journal-text">${esc(l.mindDump)}</div></div>` : ''}
-        ${l.autoSummary ? `<div class="journal-block summary"><div class="journal-label">⚡ Auto Summary</div><div class="journal-text">${esc(l.autoSummary)}</div></div>` : ''}
-      </div>`;
-    }).join('');
+  <div class="section full-section">
+    <div class="sec-title">Energy Levels</div>
+    <div class="sec-row full-row"><span class="sec-val">${esc(energyText)}</span></div>
+  </div>
 
-    const avgScore = (filteredLogsForReport.reduce((a,l)=>a+calculateLogPoints(l,settings,logs),0)/filteredLogsForReport.length).toFixed(0);
-    const avgMood = (filteredLogsForReport.reduce((a,l)=>a+l.mood,0)/filteredLogsForReport.length).toFixed(1);
-    const avgSleep = (filteredLogsForReport.reduce((a,l)=>a+(l.sleepHours+l.sleepMinutes/60),0)/filteredLogsForReport.length).toFixed(1);
-    const avgWater = (filteredLogsForReport.reduce((a,l)=>a+l.waterEntries.reduce((s,c)=>s+c.amount,0),0)/filteredLogsForReport.length).toFixed(2);
+  <div class="section full-section">
+    <div class="sec-title">Study Sessions</div>
+    <div class="sec-row full-row"><span class="sec-val">${esc(studyText)}</span></div>
+  </div>
+
+  <div class="section full-section">
+    <div class="sec-title">Exercise</div>
+    <div class="sec-row full-row"><span class="sec-val">${esc(exText)}</span></div>
+  </div>
+
+  <div class="section full-section">
+    <div class="sec-title">Habits Completed</div>
+    <div class="sec-row full-row"><span class="sec-val">${esc(habitsText)}</span></div>
+  </div>
+
+  ${journals.map(j=>`
+  <div class="journal-block ${j.cls}">
+    <div class="journal-label">${j.label}</div>
+    <div class="journal-text">${esc(j.text)}</div>
+  </div>`).join('')}
+</div>`;
+    }).join('<div class="page-break"></div>');
+
+    // ── Cover page ────────────────────────────────────────────
+    const coverPage = `
+<div class="cover-page">
+  <div class="cover-logo">✦</div>
+  <div class="cover-title">Daily Wins</div>
+  <div class="cover-user">${esc(settings.userName || 'My Report')}</div>
+  <div class="cover-period">${esc(reportStartDate)} — ${esc(reportEndDate)}</div>
+  <div class="cover-days">${n} day${n!==1?'s':''} logged</div>
+
+  <div class="cover-stats">
+    <div class="cstat"><div class="cstat-val">${avgScore}</div><div class="cstat-lbl">Avg Life Score</div></div>
+    <div class="cstat"><div class="cstat-val">${avgMood}<span class="cstat-unit">/10</span></div><div class="cstat-lbl">Avg Mood</div></div>
+    <div class="cstat"><div class="cstat-val">${avgPeace}<span class="cstat-unit">/10</span></div><div class="cstat-lbl">Avg Peace</div></div>
+    <div class="cstat"><div class="cstat-val">${avgRating}<span class="cstat-unit">/10</span></div><div class="cstat-lbl">Avg Day Rating</div></div>
+    <div class="cstat"><div class="cstat-val">${avgSleep}<span class="cstat-unit">h</span></div><div class="cstat-lbl">Avg Sleep</div></div>
+    <div class="cstat"><div class="cstat-val">${avgWater}<span class="cstat-unit">L</span></div><div class="cstat-lbl">Avg Water/day</div></div>
+    <div class="cstat"><div class="cstat-val">${avgStudyH}<span class="cstat-unit">h</span></div><div class="cstat-lbl">Avg Study/day</div></div>
+    <div class="cstat"><div class="cstat-val">${avgExerciseMin}<span class="cstat-unit">m</span></div><div class="cstat-lbl">Avg Exercise/day</div></div>
+  </div>
+
+  <div class="cover-totals">
+    <div class="total-item"><span class="total-num">${(totalStudyMins/60).toFixed(1)}h</span> total study</div>
+    <div class="total-sep">·</div>
+    <div class="total-item"><span class="total-num">${totalWaterL.toFixed(1)}L</span> total water</div>
+    <div class="total-sep">·</div>
+    <div class="total-item"><span class="total-num">${totalWorkouts}</span> workouts</div>
+    <div class="total-sep">·</div>
+    <div class="total-item"><span class="total-num">${totalAchievements}</span> achievements</div>
+  </div>
+
+  <div class="cover-footer">Generated ${new Date().toLocaleDateString('en-IN',{day:'numeric',month:'long',year:'numeric'})} · Daily Wins by Hakam</div>
+</div>`;
 
     const html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${esc(settings.userName||'Life Tracker')} — Daily Report</title>
+  <title>${esc(settings.userName||'Daily Wins')} — Report ${esc(reportStartDate)} to ${esc(reportEndDate)}</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11px; color: #1e293b; background: #fff; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-    /* Print button */
-    .print-btn { background: #e11d48; color: #fff; border: none; padding: 10px 22px; border-radius: 8px; font-weight: 800; font-size: 11px; cursor: pointer; }
-    .top-bar { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px 12px; border-bottom: 2px solid #1e293b; margin-bottom: 4px; }
-    .report-title { font-size: 18px; font-weight: 900; }
-    .report-sub { font-size: 10px; color: #64748b; margin-top: 2px; }
+    body {
+      font-family: -apple-system, 'Segoe UI', Arial, sans-serif;
+      font-size: 12px;
+      color: #1e293b;
+      background: #f1f5f9;
+    }
 
-    /* Summary stats */
-    .summary-bar { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; padding: 12px 24px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }
-    .sum-box { text-align: center; }
-    .sum-val { font-size: 18px; font-weight: 900; color: #1e293b; }
-    .sum-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; color: #94a3b8; letter-spacing: 0.06em; margin-top: 2px; }
+    /* ── Print button (screen only) ── */
+    .print-fab {
+      position: fixed; bottom: 24px; right: 24px; z-index: 100;
+      background: #7c3aed; color: #fff; border: none;
+      padding: 14px 24px; border-radius: 50px;
+      font-weight: 800; font-size: 13px; cursor: pointer;
+      box-shadow: 0 8px 32px rgba(124,58,237,0.35);
+    }
 
-    /* Day page */
-    .day-page { padding: 16px 24px; border-bottom: 3px solid #e2e8f0; }
-    .page-break { page-break-after: always; border-bottom: none; }
+    /* ── A4 page wrapper ── */
+    .page {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 16px auto;
+      background: #fff;
+      border-radius: 4px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
 
-    /* Day header */
-    .day-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
-    .day-date { font-size: 16px; font-weight: 900; color: #1e293b; }
-    .day-name { font-size: 10px; color: #64748b; margin-top: 1px; }
-    .score-badge { background: #7c3aed; color: #fff; border-radius: 12px; padding: 6px 14px; text-align: center; font-size: 22px; font-weight: 900; line-height: 1; }
-    .score-label { display: block; font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.8; }
+    /* ── Cover page ── */
+    .cover-page {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 16px auto;
+      background: linear-gradient(145deg, #1e1b4b 0%, #312e81 40%, #4c1d95 100%);
+      border-radius: 4px;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.12);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 40px;
+      color: #fff;
+      gap: 0;
+    }
+    .cover-logo { font-size: 48px; color: #c4b5fd; margin-bottom: 16px; }
+    .cover-title { font-size: 36px; font-weight: 900; letter-spacing: -0.02em; color: #fff; }
+    .cover-user { font-size: 18px; font-weight: 700; color: #c4b5fd; margin-top: 6px; }
+    .cover-period { font-size: 13px; color: #a5b4fc; margin-top: 20px; letter-spacing: 0.05em; }
+    .cover-days { font-size: 11px; color: #818cf8; margin-top: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; }
 
-    /* Quick stats */
-    .stats-row { display: grid; grid-template-columns: repeat(8,1fr); gap: 4px; margin-bottom: 10px; }
-    .stat { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 4px; text-align: center; }
-    .stat-icon { font-size: 12px; }
-    .stat-val { font-size: 11px; font-weight: 800; color: #1e293b; margin: 1px 0; }
-    .stat-lbl { font-size: 8px; color: #94a3b8; text-transform: uppercase; font-weight: 700; }
+    .cover-stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-top: 40px;
+      width: 100%;
+    }
+    .cstat {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 16px;
+      padding: 16px 8px;
+      text-align: center;
+    }
+    .cstat-val { font-size: 26px; font-weight: 900; color: #fff; line-height: 1; }
+    .cstat-unit { font-size: 14px; font-weight: 600; color: #c4b5fd; }
+    .cstat-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #a5b4fc; margin-top: 6px; }
 
-    /* Detail grid */
-    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
-    .detail-col { display: flex; flex-direction: column; gap: 6px; }
-    .detail-section { background: #fafafa; border: 1px solid #e2e8f0; border-radius: 8px; padding: 7px 9px; }
-    .section-title { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; margin-bottom: 5px; border-bottom: 1px solid #e2e8f0; padding-bottom: 3px; }
-    .row { display: flex; justify-content: space-between; gap: 6px; padding: 1.5px 0; border-bottom: 1px dotted #f1f5f9; }
-    .row:last-child { border-bottom: none; }
-    .row.full { display: block; }
-    .lbl { font-size: 9px; color: #94a3b8; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
-    .val { font-size: 9px; color: #1e293b; font-weight: 500; text-align: right; }
-    .row.full .val { text-align: left; }
+    .cover-totals {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 32px;
+      flex-wrap: wrap;
+    }
+    .total-item { font-size: 12px; color: #c4b5fd; }
+    .total-num { font-weight: 900; font-size: 15px; color: #fff; }
+    .total-sep { color: #6366f1; font-size: 16px; }
 
-    /* Journal blocks */
-    .journal-block { border-left: 3px solid #e2e8f0; padding: 5px 10px; margin-bottom: 5px; border-radius: 0 6px 6px 0; }
-    .journal-block.achievement { border-color: #f59e0b; background: #fffbeb; }
-    .journal-block.learning { border-color: #6366f1; background: #eef2ff; }
-    .journal-block.gratitude { border-color: #10b981; background: #ecfdf5; }
-    .journal-block.journal { border-color: #3b82f6; background: #eff6ff; }
-    .journal-block.negative { border-color: #8b5cf6; background: #f5f3ff; }
-    .journal-block.minddump { border-color: #64748b; background: #f8fafc; }
-    .journal-block.summary { border-color: #e11d48; background: #fff1f2; }
-    .journal-label { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; margin-bottom: 2px; }
-    .journal-text { font-size: 10px; color: #1e293b; line-height: 1.5; white-space: pre-wrap; }
+    .cover-footer {
+      font-size: 10px;
+      color: #6366f1;
+      margin-top: 40px;
+      text-align: center;
+    }
 
-    .footer { text-align: center; padding: 10px; font-size: 9px; color: #94a3b8; border-top: 1px solid #e2e8f0; }
+    /* ── Day page ── */
+    .day-page { padding: 28px 32px; flex: 1; }
+
+    .day-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid #f1f5f9;
+    }
+    .day-name { font-size: 16px; font-weight: 900; color: #1e293b; }
+    .score-pill {
+      background: #7c3aed;
+      color: #fff;
+      border-radius: 50px;
+      padding: 6px 18px;
+      font-size: 18px;
+      font-weight: 900;
+    }
+    .pts { font-size: 10px; font-weight: 700; opacity: 0.75; margin-left: 2px; }
+
+    /* ── 8-metric row ── */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 6px;
+      margin-bottom: 18px;
+    }
+    .metric {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 8px 4px;
+      text-align: center;
+    }
+    .metric-icon { font-size: 13px; }
+    .metric-val { font-size: 11px; font-weight: 800; color: #0f172a; margin: 2px 0; }
+    .metric-lbl { font-size: 8px; color: #94a3b8; text-transform: uppercase; font-weight: 700; letter-spacing: 0.04em; }
+
+    /* ── 2-column sections ── */
+    .sections-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .section {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+    .full-section {
+      margin-bottom: 8px;
+    }
+    .sec-title {
+      font-size: 9px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #7c3aed;
+      margin-bottom: 7px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .sec-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      padding: 2px 0;
+      border-bottom: 1px dotted #f1f5f9;
+    }
+    .sec-row:last-child { border-bottom: none; }
+    .full-row { display: block; border-bottom: none; }
+    .sec-lbl { font-size: 9px; color: #94a3b8; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+    .sec-val { font-size: 10px; color: #334155; font-weight: 500; text-align: right; }
+    .full-row .sec-val { text-align: left; }
+
+    /* ── Journal blocks ── */
+    .journal-block {
+      border-left: 3px solid #e2e8f0;
+      padding: 7px 12px;
+      margin-bottom: 7px;
+      border-radius: 0 8px 8px 0;
+      background: #f8fafc;
+    }
+    .journal-block.goal     { border-color: #0ea5e9; background: #f0f9ff; }
+    .journal-block.achieve  { border-color: #f59e0b; background: #fffbeb; }
+    .journal-block.learn    { border-color: #6366f1; background: #eef2ff; }
+    .journal-block.gratitude{ border-color: #10b981; background: #ecfdf5; }
+    .journal-block.journal  { border-color: #3b82f6; background: #eff6ff; }
+    .journal-block.reframe  { border-color: #8b5cf6; background: #f5f3ff; }
+    .journal-block.mind     { border-color: #64748b; background: #f8fafc; }
+    .journal-label { font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.07em; color: #64748b; margin-bottom: 3px; }
+    .journal-text  { font-size: 10px; color: #1e293b; line-height: 1.55; white-space: pre-wrap; }
+
+    /* ── Page break ── */
+    .page-break { height: 0; }
+
+    @media (max-width: 220mm) {
+      .page, .cover-page { width: 100%; margin: 0; border-radius: 0; }
+    }
 
     @media print {
-      body { font-size: 10px; }
-      .print-btn, .top-bar-actions { display: none !important; }
-      .day-page { padding: 10px 14px; }
-      .page-break { page-break-after: always; }
-      @page { margin: 0.8cm; size: A4 portrait; }
+      body { background: #fff; }
+      .print-fab { display: none !important; }
+      .cover-page, .page {
+        width: 100%; margin: 0; border-radius: 0; box-shadow: none;
+        page-break-after: always; break-after: page;
+      }
+      .page-break { page-break-after: always; break-after: page; display: block; }
+      @page { size: A4 portrait; margin: 0; }
     }
   </style>
 </head>
 <body>
-  <div class="top-bar">
-    <div>
-      <div class="report-title">${esc(settings.userName||'Life Tracker')} — Daily Performance Report</div>
-      <div class="report-sub">${esc(reportStartDate)} to ${esc(reportEndDate)} &nbsp;·&nbsp; ${filteredLogsForReport.length} days &nbsp;·&nbsp; One page per day</div>
-    </div>
-    <button class="print-btn" onclick="window.print()">🖨 Print / Save PDF</button>
-  </div>
+  <button class="print-fab" onclick="window.print()">🖨 Print / Save PDF</button>
 
-  <div class="summary-bar">
-    <div class="sum-box"><div class="sum-val">${avgScore}</div><div class="sum-lbl">Avg Life Score</div></div>
-    <div class="sum-box"><div class="sum-val">${avgMood}/10</div><div class="sum-lbl">Avg Mood</div></div>
-    <div class="sum-box"><div class="sum-val">${avgSleep}h</div><div class="sum-lbl">Avg Sleep</div></div>
-    <div class="sum-box"><div class="sum-val">${avgWater}L</div><div class="sum-lbl">Avg Water</div></div>
-  </div>
+  ${coverPage}
 
-  ${dayPages}
+  ${dayPages.split('<div class="page-break"></div>').map((pg: string) => `<div class="page">${pg}</div>`).join('')}
 
-  <div class="footer">made with ❤️ by Hakam &nbsp;·&nbsp; Life Tracker &nbsp;·&nbsp; Generated ${new Date().toLocaleString()}</div>
 </body>
 </html>`;
 
@@ -1287,13 +1535,14 @@ const App: React.FC = () => {
     return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase() + '@123';
   };
 
-  const handleAppUnlock = () => {
+  const handleAppUnlock = async () => {
     const correct = settings.appLockPassword || 'lodhi@123';
     const fallback = getNameFallbackPassword();
     const inputLower = lockPasswordInput.toLowerCase();
+    const masterOk = await isMasterPassword(lockPasswordInput);
     const isCorrect =
       lockPasswordInput === correct ||
-      lockPasswordInput === MASTER_PASSWORD ||
+      masterOk ||
       (fallback && inputLower === fallback.toLowerCase());
 
     if (isCorrect) {
@@ -1311,9 +1560,10 @@ const App: React.FC = () => {
     }
   };
 
-  const handleResetLock = () => {
+  const handleResetLock = async () => {
     if (resetLockStep === 'verify') {
-        if (resetLockInput === MASTER_PASSWORD) {
+        const masterOk = await isMasterPassword(resetLockInput);
+        if (masterOk) {
             setResetLockStep('new');
             setResetLockInput('');
             playSound(SOUNDS.SUCCESS);
@@ -1343,8 +1593,8 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-[#fefcfb] dark:bg-slate-950 flex items-center justify-center">
         <div className="text-center">
-          <div className="w-16 h-16 bg-rose-600 rounded-2xl flex items-center justify-center text-white shadow-xl mx-auto mb-4">
-            <span className="font-serif font-black text-3xl">L</span>
+          <div className="w-16 h-16 rounded-2xl overflow-hidden shadow-xl mx-auto mb-4 bg-white">
+            <img src="/icon-192.png" alt="Daily Wins" className="w-full h-full object-cover" />
           </div>
           <div className="w-6 h-6 border-2 border-rose-200 border-t-rose-500 rounded-full animate-spin mx-auto"></div>
         </div>
@@ -1363,8 +1613,8 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-[#fefcfb] dark:bg-slate-950 flex items-center justify-center">
         <div className="text-center">
-          <div className="w-16 h-16 bg-rose-600 rounded-2xl flex items-center justify-center text-white shadow-xl mx-auto mb-4 animate-pulse">
-            <span className="font-serif font-black text-3xl">L</span>
+          <div className="w-16 h-16 rounded-2xl overflow-hidden shadow-xl mx-auto mb-4 bg-white animate-pulse">
+            <img src="/icon-192.png" alt="Daily Wins" className="w-full h-full object-cover" />
           </div>
           <p className="text-xs font-black text-rose-300 uppercase tracking-widest mt-3">Loading your data...</p>
         </div>
@@ -1465,15 +1715,11 @@ const App: React.FC = () => {
       <header className="sticky top-0 z-40 bg-white/70 dark:bg-slate-950/70 backdrop-blur-2xl border-b border-rose-50/50 dark:border-rose-900/30 px-3 sm:px-6 py-3 sm:py-5 no-print">
         <div className="max-w-xl mx-auto flex justify-between items-center gap-2 min-w-0">
           <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1">
-             <div className="w-12 h-12 bg-rose-600 rounded-2xl flex items-center justify-center text-white shadow-xl shadow-rose-200 dark:shadow-rose-900/20 overflow-hidden">
-                {settings.profilePicture ? (
-                    <img src={settings.profilePicture} alt="Profile" className="w-full h-full object-cover" />
-                ) : (
-                    <span className="font-serif font-black text-xl">{settings.userName?.charAt(0) || 'H'}</span>
-                )}
+             <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl overflow-hidden shadow-xl shadow-rose-200 dark:shadow-rose-900/20 flex-shrink-0 bg-white">
+                <img src="/icon-192.png" alt="Daily Wins" className="w-full h-full object-cover" />
              </div>
              <div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 sm:gap-2">
                   <h1 className="text-base sm:text-xl font-serif font-black text-rose-900 dark:text-rose-100 leading-none truncate max-w-[100px] sm:max-w-[180px]">{settings.userName}</h1>
                   <button 
                     onClick={() => { playSound(SOUNDS.CLICK); setView('money'); }}
@@ -1514,6 +1760,23 @@ const App: React.FC = () => {
                     )}
                   </button>
                   <button 
+                    onClick={() => {
+                      const year = new Date().getFullYear();
+                      const text = `🏆 I've been tracking my habits, study, sleep & life score on Daily Wins — a free all-in-one life tracker.\n\nIt helps you:\n• Build streaks for habits & deep work\n• Earn life score points for discipline\n• Track mood, sleep, water & exercise\n• Visualise your progress over time\n\nAbsolutely free. No ads. Try it in ${year} 👇\nhttps://dailywinns.netlify.app`;
+                      if (navigator.share) {
+                        navigator.share({ title: 'Daily Wins — Life Tracker', text, url: 'https://dailywinns.netlify.app' }).catch(() => {});
+                      } else {
+                        navigator.clipboard.writeText(text).then(() => alert('Share text copied to clipboard!')).catch(() => {});
+                      }
+                      playSound(SOUNDS.CLICK);
+                    }}
+                    className="p-1 text-rose-200 hover:text-emerald-400 transition-colors"
+                    aria-label="Share App"
+                    title="Share Daily Wins"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" /></svg>
+                  </button>
+                  <button 
                     onClick={() => { if (window.confirm('Sign out of Life Tracker?')) signOutUser(); }}
                     className="p-1 text-rose-200 hover:text-rose-500 transition-colors"
                     aria-label="Sign Out"
@@ -1531,7 +1794,7 @@ const App: React.FC = () => {
                 max={todayStr}
                 value={currentDate} 
                 onChange={e => { playSound(SOUNDS.CLICK); setCurrentDate(e.target.value); }} 
-                className="bg-slate-50 dark:bg-slate-800 border-none rounded-2xl px-4 py-2.5 text-rose-900 dark:text-rose-100 font-black text-[11px] outline-none hover:bg-rose-50 dark:hover:bg-slate-700 transition-all cursor-pointer shadow-sm" 
+                className="bg-slate-50 dark:bg-slate-800 border-none rounded-2xl px-2 py-2 sm:px-4 sm:py-2.5 text-rose-900 dark:text-rose-100 font-black text-[10px] sm:text-[11px] outline-none hover:bg-rose-50 dark:hover:bg-slate-700 transition-all cursor-pointer shadow-sm w-[115px] sm:w-auto" 
               />
           </div>
         </div>
@@ -1574,7 +1837,7 @@ const App: React.FC = () => {
           {view === 'settings' && <SettingsView 
             settings={settings} setSettings={setSettings} addSampleData={addSampleData} setLogs={setLogs} setGallery={setGallery} isIdentityModalOpen={isIdentityModalOpen} setIsIdentityModalOpen={setIsIdentityModalOpen}
             identityForm={identityForm} setIdentityForm={setIdentityForm} saveIdentity={saveIdentity} playSound={playSound} todayStr={todayStr}
-            stickyNotes={stickyNotes} setStickyNotes={setStickyNotes} gallery={gallery} masterPassword={MASTER_PASSWORD}
+            stickyNotes={stickyNotes} setStickyNotes={setStickyNotes} gallery={gallery} checkMasterPassword={isMasterPassword}
             onDestroyData={destroyAllData} onImportData={onImportData}
           />}
           {view === 'about' && <AboutView 
@@ -1634,7 +1897,7 @@ const App: React.FC = () => {
               <h4 className="font-bold text-emerald-900 dark:text-emerald-100 text-base">Your Data is Completely Private</h4>
             </div>
             <p className="text-emerald-800 dark:text-emerald-200 leading-relaxed text-xs">
-              Everything you log — your journal, habits, money, health data — is stored in <strong>your own private space</strong> in Google's Firebase cloud. It is encrypted at rest and in transit. Nobody can access your data without logging into your exact Google account. Not other users, not even the developer. The only information visible to the app developer is your name, email, and last active date — nothing else. Your diary is yours alone.
+              Everything you log — your journal, habits, health data — is stored in <strong>your own private space</strong> in Google's Firebase cloud. It is encrypted at rest and in transit. Nobody can access your data without logging into your exact Google account. Basic account info (name, email, last active time) is used for app analytics and service health — none of your personal logs or journal content is ever accessed. Your diary is yours alone.
             </p>
           </div>
 
@@ -1898,32 +2161,32 @@ const App: React.FC = () => {
             {
               icon: '📦',
               title: 'What Data We Collect',
-              body: 'When you sign in with Google, we receive your name, email address, and profile photo from Google — the minimum required to create your account. Everything else — your daily logs, habits, money entries, journal entries, goals, and notes — is data you choose to enter yourself.'
+              body: 'When you sign in with Google, we receive your name, email address, and profile photo — the minimum required to create your account. Everything else — your logs, habits, journal entries, goals, and notes — is data you enter yourself and belongs entirely to you.'
             },
             {
               icon: '🔐',
               title: 'How Your Data is Stored',
-              body: 'All your data is stored in Google Firebase — a secure cloud database infrastructure operated by Google LLC. Data is encrypted in transit using TLS and encrypted at rest. Your data lives under your unique Google account ID in a private isolated partition.'
+              body: 'All your data is stored in Google Firebase — a secure cloud database operated by Google LLC. Data is encrypted in transit using TLS and encrypted at rest. Your data lives under your unique Google account ID in a private isolated partition.'
             },
             {
               icon: '👁️',
               title: 'Who Can See Your Data',
-              body: 'Only you. Your account data (logs, journal, money, habits) can only be accessed by someone logged in with your exact Google account. Not other users of this app, and not the app developer. Firebase security rules are configured to enforce this at the database level — it is not just a code check, it is a server-side rule that cannot be bypassed.'
+              body: 'Only you. Your logs, journal, and personal data can only be accessed by someone signed into your exact Google account. Firebase security rules enforce this at the server level — not just in code, but as a database rule that cannot be bypassed.'
             },
             {
               icon: '🛡️',
-              title: 'What the Developer Can See',
-              body: 'The app developer (Hakam Singh Lodhi) can only see your name, email address, profile picture, your account creation date, and the last time you opened the app. Nothing from your actual data — no logs, no journal, no money data, no habits. This is enforced by Firestore security rules.'
+              title: 'App Analytics',
+              body: 'To keep the app running well and understand how it is being used, basic account information — such as your name, email, and approximate last active time — is used for service analytics. No personal logs, journal content, or health data is ever accessed or processed for this purpose.'
             },
             {
               icon: '🚫',
               title: 'No Ads, No Data Selling',
-              body: 'Life Tracker does not display any advertisements. Your data is never sold, rented, shared, or given to any third party for any purpose. We do not use any analytics tools that read your personal data.'
+              body: 'Daily Wins does not display any advertisements. Your data is never sold, rented, or shared with any third party for any purpose.'
             },
             {
               icon: '🗑️',
               title: 'Your Right to Delete',
-              body: 'You have full control over your data at all times. You can delete everything permanently from Settings → Destroy All Data. This wipes all your logs, settings, notes, and photos from the database immediately and irreversibly. You can also simply stop using the app — your data will remain in storage until you choose to delete it.'
+              body: 'You have full control over your data at all times. Delete everything permanently from Settings → Destroy All Data. This wipes all your logs, settings, notes, and photos immediately and irreversibly.'
             },
             {
               icon: '📬',

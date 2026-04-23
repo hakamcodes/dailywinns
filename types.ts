@@ -259,7 +259,7 @@ export interface AppSettings {
   schoolName?: string;
   collegeName?: string;
   theme: 'light' | 'dark' | 'system';
-  profilePicture?: string;
+  profilePicture?: string | null;
 }
 
 export interface CorrelationResult {

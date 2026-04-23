@@ -96,9 +96,9 @@ export const calculateCustomActivityStreak = (activityId: string, logs: DailyLog
 // Permanent XP Calculator: Same as Points, but DOES NOT subtract Rewards.
 export const calculateLogXP = (log: DailyLog, settings: AppSettings, allLogs?: DailyLog[]) => {
     let score = 0;
-    const totalWater = log.waterEntries.reduce((acc, curr) => acc + curr.amount, 0);
-    const totalStudyMinutes = log.studySessions.reduce((acc, curr) => acc + curr.duration, 0);
-    const totalExerciseMinutes = log.exerciseEntries.reduce((acc, curr) => acc + curr.duration, 0);
+    const totalWater = (log.waterEntries || []).reduce((acc, curr) => acc + curr.amount, 0);
+    const totalStudyMinutes = (log.studySessions || []).reduce((acc, curr) => acc + curr.duration, 0);
+    const totalExerciseMinutes = (log.exerciseEntries || []).reduce((acc, curr) => acc + curr.duration, 0);
     const totalScreenTime = log.screenTimeHours + log.screenTimeMinutes / 60;
 
     // Pillars of happiness: +10 each
@@ -166,7 +166,7 @@ export const calculateLogXP = (log: DailyLog, settings: AppSettings, allLogs?: D
     score += Math.floor((totalExerciseMinutes / 30) * 20);
     
     // -30 point if don't does any body maintenance in a day
-    if (log.exerciseEntries.length === 0) score -= 30;
+    if ((log.exerciseEntries || []).length === 0) score -= 30;
     
     // -10 point for each hour for screentime after 4 hours (proportional floor)
     if (totalScreenTime > 4) {
@@ -174,12 +174,12 @@ export const calculateLogXP = (log: DailyLog, settings: AppSettings, allLogs?: D
     }
     
     // +5 point for each meal
-    if (log.meals.breakfast) score += 5;
-    if (log.meals.lunch) score += 5;
-    if (log.meals.dinner) score += 5;
+    if (log.meals?.breakfast) score += 5;
+    if (log.meals?.lunch) score += 5;
+    if (log.meals?.dinner) score += 5;
     
     // -10 points for one junk food
-    score -= log.junkFood * 10;
+    score -= (log.junkFood || 0) * 10;
     
     // +10 for writing
     if (log.journal?.trim().length > 0) score += 10;
@@ -189,9 +189,9 @@ export const calculateLogXP = (log: DailyLog, settings: AppSettings, allLogs?: D
     if (log.goalsCompleted === 100) score += 20;
     
     // +10 for skincare (each check)
-    if (log.skincare.morning) score += 10;
-    if (log.skincare.afternoon) score += 10;
-    if (log.skincare.night) score += 10;
+    if (log.skincare?.morning) score += 10;
+    if (log.skincare?.afternoon) score += 10;
+    if (log.skincare?.night) score += 10;
 
     // Apply Self-Correction Penalties manually (RedeemedReward with negative points for penalty, but we check if it is a 'penalty' type)
     if (log.redeemedRewards) {
@@ -287,7 +287,7 @@ export const getPointsBreakdown = (log: DailyLog, settings: AppSettings, allLogs
       items.push({ label: 'Breathing Exercises', points: log.breathingSessions * 10, icon: '🌬️' });
     }
 
-    const totalWater = log.waterEntries.reduce((acc, curr) => acc + curr.amount, 0);
+    const totalWater = (log.waterEntries || []).reduce((acc, curr) => acc + curr.amount, 0);
     const waterPts = Math.floor(totalWater * 10);
     if (waterPts !== 0) items.push({ label: 'Hydration', points: waterPts, icon: '💧' });
 
@@ -295,29 +295,30 @@ export const getPointsBreakdown = (log: DailyLog, settings: AppSettings, allLogs
     if (sleepTotal < 5 && sleepTotal > 0) items.push({ label: 'Sleep Penalty (<5h)', points: -20, icon: '🌙' });
     if (sleepTotal > 6) items.push({ label: 'Sleep Overshoot (>6h)', points: -Math.floor((sleepTotal - 6) * 20), icon: '🌙' });
 
-    const totalStudyMinutes = log.studySessions.reduce((acc, curr) => acc + curr.duration, 0);
+    const totalStudyMinutes = (log.studySessions || []).reduce((acc, curr) => acc + curr.duration, 0);
     const studyPts = Math.floor((totalStudyMinutes / 30) * 10);
     if (studyPts !== 0) items.push({ label: 'Deep Work', points: studyPts, icon: '📚' });
 
-    const totalExerciseMinutes = log.exerciseEntries.reduce((acc, curr) => acc + curr.duration, 0);
+    const exerciseEntries = log.exerciseEntries || [];
+    const totalExerciseMinutes = exerciseEntries.reduce((acc, curr) => acc + curr.duration, 0);
     const exercisePts = Math.floor((totalExerciseMinutes / 30) * 20);
     if (exercisePts !== 0) items.push({ label: 'Exercise', points: exercisePts, icon: '🏃' });
-    if (log.exerciseEntries.length === 0) items.push({ label: 'No Exercise Penalty', points: -30, icon: '🏃' });
+    if (exerciseEntries.length === 0) items.push({ label: 'No Exercise Penalty', points: -30, icon: '🏃' });
 
     const totalScreenTime = log.screenTimeHours + log.screenTimeMinutes / 60;
     if (totalScreenTime > 4) items.push({ label: 'Screen Time Overuse', points: -Math.floor((totalScreenTime - 4) * 10), icon: '📱' });
 
-    const mealPts = (log.meals.breakfast ? 5 : 0) + (log.meals.lunch ? 5 : 0) + (log.meals.dinner ? 5 : 0);
+    const mealPts = (log.meals?.breakfast ? 5 : 0) + (log.meals?.lunch ? 5 : 0) + (log.meals?.dinner ? 5 : 0);
     if (mealPts !== 0) items.push({ label: 'Regular Meals', points: mealPts, icon: '🍽️' });
 
-    if (log.junkFood > 0) items.push({ label: 'Junk Food Penalty', points: -log.junkFood * 10, icon: '🍕' });
+    if ((log.junkFood || 0) > 0) items.push({ label: 'Junk Food Penalty', points: -(log.junkFood || 0) * 10, icon: '🍕' });
 
     if (log.journal?.trim().length > 0) items.push({ label: 'Journaling', points: 10, icon: '📝' });
     if (log.gratitude?.trim().length > 0) items.push({ label: 'Gratitude', points: 10, icon: '🙏' });
 
     if (log.goalsCompleted === 100) items.push({ label: 'Perfect Goals', points: 20, icon: '🎯' });
 
-    const skincarePts = (log.skincare.morning ? 10 : 0) + (log.skincare.afternoon ? 10 : 0) + (log.skincare.night ? 10 : 0);
+    const skincarePts = (log.skincare?.morning ? 10 : 0) + (log.skincare?.afternoon ? 10 : 0) + (log.skincare?.night ? 10 : 0);
     if (skincarePts !== 0) items.push({ label: 'Skincare Routine', points: skincarePts, icon: '✨' });
 
     // Rewards (Deductions)
@@ -332,32 +333,32 @@ export const getPointsBreakdown = (log: DailyLog, settings: AppSettings, allLogs
 
 export const createSummaryText = (log: DailyLog, settings: AppSettings, allLogs?: DailyLog[]) => {
     const points = calculateLogPoints(log, settings, allLogs);
-    const water = log.waterEntries.reduce((a, c) => a + c.amount, 0);
-    const study = log.studySessions.reduce((a, c) => a + c.duration, 0);
-    const subjects = Array.from(new Set(log.studySessions.map(s => s.subject))).join(', ');
-    const exercise = log.exerciseEntries.reduce((a, c) => a + c.duration, 0);
-    const exerciseTypes = Array.from(new Set(log.exerciseEntries.map(e => e.type))).join(', ');
+    const water = (log.waterEntries || []).reduce((a, c) => a + c.amount, 0);
+    const study = (log.studySessions || []).reduce((a, c) => a + c.duration, 0);
+    const subjects = Array.from(new Set((log.studySessions || []).map(s => s.subject))).join(', ');
+    const exercise = (log.exerciseEntries || []).reduce((a, c) => a + c.duration, 0);
+    const exerciseTypes = Array.from(new Set((log.exerciseEntries || []).map(e => e.type))).join(', ');
     
     const activePillars = [];
-    if (log.happinessPillars.physical) activePillars.push("Physical Activity");
-    if (log.happinessPillars.problemSolving) activePillars.push("Complex Problem Solving");
-    if (log.happinessPillars.helping) activePillars.push("Help People/Animals/Plants");
-    if (log.happinessPillars.creative) activePillars.push("Creative Work");
-    if (log.happinessPillars.explore) activePillars.push("Explore New Places");
-    if (log.happinessPillars.learning) activePillars.push("Learning New Things");
-    if (log.happinessPillars.ideas) activePillars.push("New Ideas");
-    if (log.happinessPillars.qualityTime) activePillars.push("Quality Time");
-    if (log.happinessPillars.progression) activePillars.push("Progression");
+    if (log.happinessPillars?.physical) activePillars.push("Physical Activity");
+    if (log.happinessPillars?.problemSolving) activePillars.push("Complex Problem Solving");
+    if (log.happinessPillars?.helping) activePillars.push("Help People/Animals/Plants");
+    if (log.happinessPillars?.creative) activePillars.push("Creative Work");
+    if (log.happinessPillars?.explore) activePillars.push("Explore New Places");
+    if (log.happinessPillars?.learning) activePillars.push("Learning New Things");
+    if (log.happinessPillars?.ideas) activePillars.push("New Ideas");
+    if (log.happinessPillars?.qualityTime) activePillars.push("Quality Time");
+    if (log.happinessPillars?.progression) activePillars.push("Progression");
 
     const skincare = [];
-    if (log.skincare.morning) skincare.push("Morning");
-    if (log.skincare.afternoon) skincare.push("Afternoon");
-    if (log.skincare.night) skincare.push("Night");
+    if (log.skincare?.morning) skincare.push("Morning");
+    if (log.skincare?.afternoon) skincare.push("Afternoon");
+    if (log.skincare?.night) skincare.push("Night");
 
     const meals = [];
-    if (log.meals.breakfast) meals.push("Breakfast");
-    if (log.meals.lunch) meals.push("Lunch");
-    if (log.meals.dinner) meals.push("Dinner");
+    if (log.meals?.breakfast) meals.push("Breakfast");
+    if (log.meals?.lunch) meals.push("Lunch");
+    if (log.meals?.dinner) meals.push("Dinner");
 
     let text = `Summary for ${log.date}:\n`;
     text += `• Life Score: ${points}\n`;
@@ -376,7 +377,7 @@ export const createSummaryText = (log: DailyLog, settings: AppSettings, allLogs?
         const { morning, afternoon, evening, night } = log.energyLevels;
         text += `• Energy: M:${morning || '-'} A:${afternoon || '-'} E:${evening || '-'} N:${night || '-'}\n`;
     }
-    if (meals.length > 0) text += `• Meals: ${meals.join(', ')} ${log.meals.notes ? `(${log.meals.notes})` : ''}\n`;
+    if (meals.length > 0) text += `• Meals: ${meals.join(', ')} ${log.meals?.notes ? `(${log.meals.notes})` : ''}\n`;
     if (log.junkFood > 0) text += `• Junk Food: ${log.junkFood} serving(s) ${log.junkFoodNotes ? `(${log.junkFoodNotes})` : ''}\n`;
     text += `• Screen Time: ${log.screenTimeHours}h ${log.screenTimeMinutes}m ${log.screenTimeNotes ? `(${log.screenTimeNotes})` : ''}\n`;
     text += `• Wellness: Mood ${log.mood}/10, Peace ${log.peaceLevel}/10. Nutrition: ${log.nutritionScore}.\n`;
@@ -394,16 +395,16 @@ export const calculateActivityStreak = (logs: DailyLog[], type: 'water' | 'study
     const checkLog = (log: DailyLog) => {
         switch (type) {
             case 'water':
-                const water = log.waterEntries.reduce((a, c) => a + c.amount, 0);
+                const water = (log.waterEntries || []).reduce((a, c) => a + c.amount, 0);
                 return water >= settings.waterTarget;
             case 'study':
-                const study = log.studySessions.reduce((a, c) => a + c.duration, 0);
+                const study = (log.studySessions || []).reduce((a, c) => a + c.duration, 0);
                 return study >= 60; // 1 hour
             case 'exercise':
-                const exercise = log.exerciseEntries.reduce((a, c) => a + c.duration, 0);
+                const exercise = (log.exerciseEntries || []).reduce((a, c) => a + c.duration, 0);
                 return exercise >= 15; // 15 mins
             case 'skincare':
-                return log.skincare.morning && log.skincare.afternoon && log.skincare.night;
+                return !!(log.skincare?.morning && log.skincare?.afternoon && log.skincare?.night);
             case 'screenTime':
                 const screen = log.screenTimeHours + log.screenTimeMinutes / 60;
                 return screen < 4; // < 4 hours
@@ -411,7 +412,7 @@ export const calculateActivityStreak = (logs: DailyLog[], type: 'water' | 'study
                 const sleep = log.sleepHours + log.sleepMinutes / 60;
                 return sleep >= 5 && sleep <= 7; // 5 to 7 hours
             case 'meals':
-                const meals = [log.meals.breakfast, log.meals.lunch, log.meals.dinner].filter(Boolean).length;
+                const meals = [log.meals?.breakfast, log.meals?.lunch, log.meals?.dinner].filter(Boolean).length;
                 return meals >= 2; // At least 2 meals
             case 'journaling':
                 const textLen = (log.journal || "").length + (log.gratitude || "").length;

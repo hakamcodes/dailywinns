@@ -760,7 +760,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <input type="file" accept=".json" className="hidden" onChange={handleImportBackup} disabled={isImporting} />
               </label>
 
-              <button onClick={addSampleData} className="w-full bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-black py-5 rounded-[1.75rem] border border-indigo-100 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-all text-xs uppercase tracking-widest">Refresh Sample Intelligence</button>
+              <button onClick={() => {
+                if (window.confirm('⚠️ WARNING — SAMPLE DATA WILL MIX WITH YOUR REAL DATA\n\nLoading sample intelligence will inject fake logs, habits, and entries into your existing data. Your real data and sample data will be merged together and cannot be separated.\n\nIf this happens, your ONLY option is to delete everything and start fresh.\n\nAre you sure you want to continue?')) {
+                  if (window.confirm('🚨 FINAL WARNING\n\nYou are about to mix sample data into your real data. This CANNOT be undone — the only recovery is a full data wipe.\n\nOnly proceed if you are testing the app and do not care about your current data.\n\nContinue anyway?')) {
+                    addSampleData();
+                  }
+                }
+              }} className="w-full bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 font-black py-5 rounded-[1.75rem] border border-indigo-100 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-all text-xs uppercase tracking-widest">Refresh Sample Intelligence</button>
               <button 
                 onClick={() => {
                   const year = new Date().getFullYear();

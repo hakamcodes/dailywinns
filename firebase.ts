@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { initializeFirestore, persistentLocalCache, persistentSingleTabManager } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAufXiRRi9H0DBKZWPDlFquIe6RwvFPm3o",
@@ -12,6 +12,14 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+
+// Persistent IndexedDB cache — repeat opens (20x/day) served instantly from device
+// First open fetches from network and caches. All subsequent opens use cache.
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({
+    tabManager: persistentSingleTabManager({ forceOwnership: true })
+  })
+});
+
 export const auth = getAuth(app);
-export const db = getFirestore(app);
 export const googleProvider = new GoogleAuthProvider();
