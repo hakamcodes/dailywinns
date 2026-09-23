@@ -44,15 +44,29 @@ function parseFirebaseError(code: string): string {
   }
 }
 
+/* ── Autofill fix styles injected once ─────────────────────────────────────── */
+const AUTOFILL_STYLE = `
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 60px #1e293b inset !important;
+    -webkit-text-fill-color: #f1f5f9 !important;
+    caret-color: #f1f5f9;
+    border-color: rgba(99,102,241,0.5) !important;
+    transition: background-color 9999s ease-in-out 0s;
+  }
+`;
+
 // ─── Eye icon ────────────────────────────────────────────────────────────────
 const EyeIcon: React.FC<{ open: boolean }> = ({ open }) =>
   open ? (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+    <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
       <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
       <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
     </svg>
   ) : (
-    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+    <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
       <path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
     </svg>
   );
@@ -67,6 +81,11 @@ const GoogleLogo = () => (
   </svg>
 );
 
+// ─── Spinner ──────────────────────────────────────────────────────────────────
+const Spinner = () => (
+  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0" />
+);
+
 // ─── Input field ──────────────────────────────────────────────────────────────
 interface InputProps {
   label: string;
@@ -79,26 +98,34 @@ interface InputProps {
 }
 const Input: React.FC<InputProps> = ({ label, type, value, onChange, placeholder, autoComplete, rightSlot }) => (
   <div className="flex flex-col gap-1.5">
-    <label className="text-[11px] font-black uppercase tracking-widest text-indigo-300">{label}</label>
-    <div className="relative">
+    <label className="text-[10px] font-black uppercase tracking-[0.18em] text-indigo-400/80 pl-1">{label}</label>
+    <div className="relative group">
       <input
         type={type}
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={placeholder}
         autoComplete={autoComplete}
-        className="w-full bg-white/8 border border-white/15 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 transition-all pr-11"
+        className="w-full rounded-xl px-4 py-3 text-sm font-medium text-slate-100 placeholder-slate-600 focus:outline-none transition-all duration-200 pr-11"
+        style={{
+          background: 'rgba(15, 23, 42, 0.85)',
+          border: '1px solid rgba(99, 102, 241, 0.2)',
+          boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.4)',
+        }}
+        onFocus={e => {
+          e.currentTarget.style.border = '1px solid rgba(99,102,241,0.7)';
+          e.currentTarget.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.4), 0 0 0 3px rgba(99,102,241,0.12)';
+        }}
+        onBlur={e => {
+          e.currentTarget.style.border = '1px solid rgba(99, 102, 241, 0.2)';
+          e.currentTarget.style.boxShadow = 'inset 0 1px 2px rgba(0,0,0,0.4)';
+        }}
       />
       {rightSlot && (
-        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">{rightSlot}</div>
+        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-indigo-300 transition-colors">{rightSlot}</div>
       )}
     </div>
   </div>
-);
-
-// ─── Spinner ──────────────────────────────────────────────────────────────────
-const Spinner = () => (
-  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin shrink-0" />
 );
 
 // ─── Privacy Policy ──────────────────────────────────────────────────────────
@@ -205,18 +232,27 @@ const ForgotPasswordView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col items-center justify-center px-5 py-10 relative overflow-hidden">
-      <div className="absolute top-0 left-0 w-72 h-72 bg-indigo-600/20 rounded-full blur-3xl pointer-events-none -translate-x-1/2 -translate-y-1/2" />
-      <div className="absolute bottom-0 right-0 w-64 h-64 bg-violet-600/20 rounded-full blur-3xl pointer-events-none translate-x-1/2 translate-y-1/2" />
+      <style dangerouslySetInnerHTML={{ __html: AUTOFILL_STYLE }} />
+      <div className="absolute top-0 left-0 w-96 h-96 bg-indigo-600/15 rounded-full blur-3xl pointer-events-none -translate-x-1/2 -translate-y-1/2" />
+      <div className="absolute bottom-0 right-0 w-80 h-80 bg-violet-600/15 rounded-full blur-3xl pointer-events-none translate-x-1/2 translate-y-1/2" />
 
       <div className="relative z-10 w-full max-w-sm">
-        <button onClick={onBack} className="flex items-center gap-2 text-xs font-black text-slate-400 hover:text-indigo-400 uppercase tracking-widest mb-8 transition-colors">
+        <button onClick={onBack} className="flex items-center gap-2 text-xs font-black text-slate-500 hover:text-indigo-400 uppercase tracking-widest mb-8 transition-colors">
           <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
             <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
           </svg>
           Back
         </button>
 
-        <div className="bg-white/5 border border-white/10 rounded-3xl p-6">
+        <div
+          className="rounded-3xl p-6"
+          style={{
+            background: 'rgba(15,23,42,0.7)',
+            border: '1px solid rgba(99,102,241,0.2)',
+            boxShadow: '0 25px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05)',
+            backdropFilter: 'blur(20px)',
+          }}
+        >
           <div className="text-3xl mb-3">🔑</div>
           <h2 className="text-xl font-serif font-black text-white mb-1">Reset Password</h2>
           <p className="text-xs text-slate-400 mb-6 leading-relaxed">
@@ -224,22 +260,28 @@ const ForgotPasswordView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           </p>
 
           {sent ? (
-            <div className="bg-emerald-500/15 border border-emerald-500/30 rounded-2xl p-4 text-center">
+            <div className="bg-emerald-500/10 border border-emerald-500/25 rounded-2xl p-5 text-center">
               <div className="text-2xl mb-2">✅</div>
               <p className="text-sm font-bold text-emerald-300 mb-1">Email sent!</p>
-              <p className="text-xs text-slate-400">Check your inbox and follow the link to reset your password.</p>
-              <button onClick={onBack} className="mt-4 w-full bg-indigo-600 text-white font-black py-3 rounded-xl text-xs uppercase tracking-widest hover:bg-indigo-700 transition-all active:scale-95">
+              <p className="text-xs text-slate-400 mb-4">Check your inbox and follow the link to reset your password.</p>
+              <button onClick={onBack} className="w-full bg-indigo-600 text-white font-black py-3 rounded-xl text-xs uppercase tracking-widest hover:bg-indigo-700 transition-all active:scale-95">
                 Back to Sign In
               </button>
             </div>
           ) : (
             <form onSubmit={handleReset} className="flex flex-col gap-4">
               <Input label="Email" type="email" value={email} onChange={setEmail} placeholder="you@example.com" autoComplete="email" />
-              {error && <p className="text-xs text-rose-400 font-medium">{error}</p>}
+              {error && (
+                <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/20 rounded-xl px-3 py-2.5">
+                  <span className="text-rose-400 text-xs">⚠</span>
+                  <p className="text-xs text-rose-400 font-medium">{error}</p>
+                </div>
+              )}
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3.5 rounded-xl text-sm transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-2 text-white font-black py-3.5 rounded-xl text-sm transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ background: 'linear-gradient(135deg, #6366f1, #4f46e5)' }}
               >
                 {loading ? <Spinner /> : null}
                 {loading ? 'Sending…' : 'Send Reset Link'}
@@ -262,10 +304,7 @@ const LoginScreen: React.FC = () => {
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showForgot, setShowForgot] = useState(false);
 
-  // Google
   const [googleLoading, setGoogleLoading] = useState(false);
-
-  // Shared
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -334,26 +373,50 @@ const LoginScreen: React.FC = () => {
   if (showForgot) return <ForgotPasswordView onBack={() => setShowForgot(false)} />;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col items-center justify-center px-5 py-10 relative overflow-hidden">
+    <div className="min-h-screen flex flex-col items-center justify-center px-5 py-10 relative overflow-hidden"
+      style={{ background: 'linear-gradient(145deg, #020617 0%, #0f0c29 40%, #1e1b4b 70%, #0f172a 100%)' }}
+    >
+      {/* Inject autofill fix */}
+      <style dangerouslySetInnerHTML={{ __html: AUTOFILL_STYLE }} />
 
-      {/* Background glow blobs */}
-      <div className="absolute top-0 left-0 w-72 h-72 bg-indigo-600/20 rounded-full blur-3xl pointer-events-none -translate-x-1/2 -translate-y-1/2" />
-      <div className="absolute bottom-0 right-0 w-64 h-64 bg-violet-600/20 rounded-full blur-3xl pointer-events-none translate-x-1/2 translate-y-1/2" />
+      {/* Background orbs */}
+      <div className="absolute top-[-10%] left-[-10%] w-[420px] h-[420px] rounded-full pointer-events-none"
+        style={{ background: 'radial-gradient(circle, rgba(99,102,241,0.18) 0%, transparent 70%)', filter: 'blur(40px)' }} />
+      <div className="absolute bottom-[-5%] right-[-5%] w-[380px] h-[380px] rounded-full pointer-events-none"
+        style={{ background: 'radial-gradient(circle, rgba(139,92,246,0.15) 0%, transparent 70%)', filter: 'blur(40px)' }} />
+      <div className="absolute top-[40%] right-[-5%] w-[200px] h-[200px] rounded-full pointer-events-none"
+        style={{ background: 'radial-gradient(circle, rgba(59,130,246,0.12) 0%, transparent 70%)', filter: 'blur(30px)' }} />
 
       <div className="relative z-10 w-full max-w-sm flex flex-col items-center">
 
-        {/* Logo */}
-        <div className="w-20 h-20 rounded-[1.5rem] overflow-hidden shadow-2xl shadow-indigo-900/60 mb-5 bg-white ring-2 ring-white/10">
-          <img src="/icon-192.png" alt="Daily Wins" className="w-full h-full object-cover" />
+        {/* Logo + name */}
+        <div className="flex flex-col items-center mb-6">
+          <div
+            className="w-[72px] h-[72px] rounded-[22px] overflow-hidden mb-4"
+            style={{
+              boxShadow: '0 0 0 1px rgba(255,255,255,0.08), 0 20px 50px rgba(99,102,241,0.35), 0 8px 20px rgba(0,0,0,0.5)',
+            }}
+          >
+            <img src="/icon-192.png" alt="Daily Wins" className="w-full h-full object-cover" />
+          </div>
+          <h1 className="text-[2.2rem] font-serif font-black text-white tracking-tight leading-none mb-1">Daily Wins</h1>
+          <p
+            className="text-[10px] font-black uppercase tracking-[0.3em]"
+            style={{ color: 'rgba(165,180,252,0.7)' }}
+          >
+            Your Life. Levelled Up.
+          </p>
         </div>
 
-        {/* App name */}
-        <h1 className="text-4xl font-serif font-black text-white tracking-tight mb-1">Daily Wins</h1>
-        <p className="text-xs font-bold text-indigo-300 uppercase tracking-[0.25em] mb-6">Your Life. Levelled Up.</p>
-
-        {/* Motivational quote */}
-        <div className="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 mb-5 text-center">
-          <p className="text-sm text-indigo-200 leading-relaxed italic">"{quote}"</p>
+        {/* Quote */}
+        <div
+          className="w-full rounded-2xl px-5 py-3.5 mb-5 text-center"
+          style={{
+            background: 'rgba(99,102,241,0.08)',
+            border: '1px solid rgba(99,102,241,0.15)',
+          }}
+        >
+          <p className="text-[13px] text-indigo-200/80 leading-relaxed italic">"{quote}"</p>
         </div>
 
         {/* Feature chips */}
@@ -361,7 +424,12 @@ const LoginScreen: React.FC = () => {
           {FEATURES.map(f => (
             <span
               key={f.label}
-              className="flex items-center gap-1.5 text-[11px] font-semibold bg-white/8 border border-white/10 text-indigo-200 px-3 py-1.5 rounded-full"
+              className="flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded-full"
+              style={{
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.08)',
+                color: 'rgba(199,210,254,0.8)',
+              }}
             >
               <span>{f.icon}</span>
               {f.label}
@@ -369,50 +437,70 @@ const LoginScreen: React.FC = () => {
           ))}
         </div>
 
-        {/* Auth card */}
-        <div className="w-full bg-white/5 border border-white/10 rounded-3xl p-5 mb-4 backdrop-blur-sm">
-
-          {/* Google button — always visible */}
+        {/* ── Auth Card ────────────────────────────────────────────── */}
+        <div
+          className="w-full rounded-3xl p-5 mb-4"
+          style={{
+            background: 'rgba(10, 15, 30, 0.75)',
+            border: '1px solid rgba(99,102,241,0.18)',
+            boxShadow: '0 30px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.03) inset, 0 1px 0 rgba(255,255,255,0.06) inset',
+            backdropFilter: 'blur(24px)',
+          }}
+        >
+          {/* Google button */}
           <button
             onClick={handleGoogle}
             disabled={googleLoading || loading}
-            className="w-full flex items-center justify-center gap-3 bg-white rounded-2xl px-6 py-3.5 text-slate-800 font-bold text-sm hover:bg-slate-50 active:scale-[0.98] transition-all disabled:opacity-60 disabled:cursor-not-allowed shadow-lg shadow-black/20 mb-4"
+            className="w-full flex items-center justify-center gap-3 rounded-2xl px-6 py-3.5 font-bold text-sm active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed mb-4"
+            style={{
+              background: 'linear-gradient(180deg, #ffffff 0%, #f0f0f0 100%)',
+              color: '#1e293b',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.35), 0 1px 0 rgba(255,255,255,0.8) inset',
+            }}
           >
             {googleLoading ? (
               <div className="w-5 h-5 border-2 border-slate-300 border-t-indigo-500 rounded-full animate-spin shrink-0" />
             ) : (
               <GoogleLogo />
             )}
-            <span>{googleLoading ? 'Signing in…' : 'Continue with Google'}</span>
+            <span className="tracking-wide">{googleLoading ? 'Signing in…' : 'Continue with Google'}</span>
           </button>
 
           {/* Divider */}
           <div className="flex items-center gap-3 mb-4">
-            <div className="flex-1 h-px bg-white/10" />
-            <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">or</span>
-            <div className="flex-1 h-px bg-white/10" />
+            <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.07)' }} />
+            <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'rgba(148,163,184,0.5)' }}>or</span>
+            <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.07)' }} />
           </div>
 
-          {/* Tabs */}
-          <div className="flex bg-white/5 border border-white/10 rounded-2xl p-1 mb-5">
+          {/* Sign In / Sign Up tabs */}
+          <div
+            className="flex rounded-2xl p-1 mb-5"
+            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}
+          >
             {(['signin', 'signup'] as AuthTab[]).map(t => (
               <button
                 key={t}
                 onClick={() => handleTabChange(t)}
-                className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
+                className="flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all duration-200"
+                style={
                   tab === t
-                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-900/40'
-                    : 'text-slate-400 hover:text-white'
-                }`}
+                    ? {
+                        background: 'linear-gradient(135deg, #6366f1, #4f46e5)',
+                        color: '#fff',
+                        boxShadow: '0 4px 16px rgba(99,102,241,0.4)',
+                      }
+                    : { color: 'rgba(148,163,184,0.6)' }
+                }
               >
                 {t === 'signin' ? 'Sign In' : 'Sign Up'}
               </button>
             ))}
           </div>
 
-          {/* Sign In Form */}
+          {/* ── Sign In Form ── */}
           {tab === 'signin' && (
-            <form onSubmit={handleSignIn} className="flex flex-col gap-4" noValidate>
+            <form onSubmit={handleSignIn} className="flex flex-col gap-3.5" noValidate>
               <Input
                 label="Email"
                 type="email"
@@ -429,44 +517,56 @@ const LoginScreen: React.FC = () => {
                 placeholder="••••••••"
                 autoComplete="current-password"
                 rightSlot={
-                  <button type="button" onClick={() => setSiShowPwd(v => !v)} className="hover:text-indigo-300 transition-colors">
+                  <button type="button" onClick={() => setSiShowPwd(v => !v)} className="transition-colors">
                     <EyeIcon open={siShowPwd} />
                   </button>
                 }
               />
-              <div className="flex justify-end -mt-1">
+              <div className="flex justify-end -mt-0.5">
                 <button
                   type="button"
                   onClick={() => setShowForgot(true)}
-                  className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
+                  className="text-[11px] font-semibold transition-colors"
+                  style={{ color: 'rgba(129,140,248,0.8)' }}
+                  onMouseEnter={e => (e.currentTarget.style.color = '#a5b4fc')}
+                  onMouseLeave={e => (e.currentTarget.style.color = 'rgba(129,140,248,0.8)')}
                 >
                   Forgot password?
                 </button>
               </div>
 
-              {error && <p className="text-xs text-rose-400 font-medium text-center">{error}</p>}
+              {error && (
+                <div className="flex items-start gap-2 rounded-xl px-3 py-2.5" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                  <span className="text-rose-400 text-xs mt-0.5">⚠</span>
+                  <p className="text-xs text-rose-400 font-medium leading-snug">{error}</p>
+                </div>
+              )}
 
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3.5 rounded-xl text-sm transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-2.5 text-white font-black py-3.5 rounded-xl text-sm tracking-wide transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed mt-1"
+                style={{ background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)', boxShadow: '0 8px 24px rgba(99,102,241,0.35)' }}
               >
                 {loading ? <Spinner /> : null}
                 {loading ? 'Signing in…' : 'Sign In'}
               </button>
 
-              <p className="text-center text-[11px] text-slate-500">
+              <p className="text-center text-[11px] mt-0.5" style={{ color: 'rgba(100,116,139,0.8)' }}>
                 Don't have an account?{' '}
-                <button type="button" onClick={() => handleTabChange('signup')} className="text-indigo-400 hover:text-indigo-300 font-bold transition-colors">
+                <button type="button" onClick={() => handleTabChange('signup')} className="font-bold transition-colors" style={{ color: '#818cf8' }}
+                  onMouseEnter={e => (e.currentTarget.style.color = '#a5b4fc')}
+                  onMouseLeave={e => (e.currentTarget.style.color = '#818cf8')}
+                >
                   Sign Up
                 </button>
               </p>
             </form>
           )}
 
-          {/* Sign Up Form */}
+          {/* ── Sign Up Form ── */}
           {tab === 'signup' && (
-            <form onSubmit={handleSignUp} className="flex flex-col gap-4" noValidate>
+            <form onSubmit={handleSignUp} className="flex flex-col gap-3.5" noValidate>
               <Input
                 label="Full Name"
                 type="text"
@@ -491,7 +591,7 @@ const LoginScreen: React.FC = () => {
                 placeholder="Min. 6 characters"
                 autoComplete="new-password"
                 rightSlot={
-                  <button type="button" onClick={() => setSuShowPwd(v => !v)} className="hover:text-indigo-300 transition-colors">
+                  <button type="button" onClick={() => setSuShowPwd(v => !v)} className="transition-colors">
                     <EyeIcon open={suShowPwd} />
                   </button>
                 }
@@ -504,27 +604,41 @@ const LoginScreen: React.FC = () => {
                 placeholder="Repeat password"
                 autoComplete="new-password"
                 rightSlot={
-                  <button type="button" onClick={() => setSuShowConfirm(v => !v)} className="hover:text-indigo-300 transition-colors">
+                  <button type="button" onClick={() => setSuShowConfirm(v => !v)} className="transition-colors">
                     <EyeIcon open={suShowConfirm} />
                   </button>
                 }
               />
 
-              {error && <p className="text-xs text-rose-400 font-medium text-center">{error}</p>}
-              {successMsg && <p className="text-xs text-emerald-400 font-medium text-center">{successMsg}</p>}
+              {error && (
+                <div className="flex items-start gap-2 rounded-xl px-3 py-2.5" style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                  <span className="text-rose-400 text-xs mt-0.5">⚠</span>
+                  <p className="text-xs text-rose-400 font-medium leading-snug">{error}</p>
+                </div>
+              )}
+              {successMsg && (
+                <div className="flex items-start gap-2 rounded-xl px-3 py-2.5" style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)' }}>
+                  <span className="text-emerald-400 text-xs mt-0.5">✓</span>
+                  <p className="text-xs text-emerald-400 font-medium leading-snug">{successMsg}</p>
+                </div>
+              )}
 
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black py-3.5 rounded-xl text-sm transition-all active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                className="w-full flex items-center justify-center gap-2.5 text-white font-black py-3.5 rounded-xl text-sm tracking-wide transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed mt-1"
+                style={{ background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)', boxShadow: '0 8px 24px rgba(99,102,241,0.35)' }}
               >
                 {loading ? <Spinner /> : null}
                 {loading ? 'Creating account…' : 'Create Account'}
               </button>
 
-              <p className="text-center text-[11px] text-slate-500">
+              <p className="text-center text-[11px] mt-0.5" style={{ color: 'rgba(100,116,139,0.8)' }}>
                 Already have an account?{' '}
-                <button type="button" onClick={() => handleTabChange('signin')} className="text-indigo-400 hover:text-indigo-300 font-bold transition-colors">
+                <button type="button" onClick={() => handleTabChange('signin')} className="font-bold transition-colors" style={{ color: '#818cf8' }}
+                  onMouseEnter={e => (e.currentTarget.style.color = '#a5b4fc')}
+                  onMouseLeave={e => (e.currentTarget.style.color = '#818cf8')}
+                >
                   Sign In
                 </button>
               </p>
@@ -533,23 +647,23 @@ const LoginScreen: React.FC = () => {
         </div>
 
         {/* Trust line */}
-        <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 mb-5">
-          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+        <div className="flex items-center justify-center gap-1.5 text-[11px] mb-4" style={{ color: 'rgba(100,116,139,0.6)' }}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
           </svg>
           <span>End-to-end private — your data belongs to you</span>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-center gap-3 text-[10px]">
+        <div className="flex items-center justify-center gap-3 text-[10px]" style={{ color: 'rgba(71,85,105,0.7)' }}>
           <button
             onClick={() => setShowPrivacy(true)}
-            className="text-slate-600 hover:text-indigo-400 underline underline-offset-2 transition-colors font-medium"
+            className="underline underline-offset-2 transition-colors font-medium hover:text-indigo-400"
           >
             Privacy Policy
           </button>
-          <span className="text-slate-700">·</span>
-          <span className="text-slate-700">© 2025 Hakam Singh Lodhi</span>
+          <span>·</span>
+          <span>© 2025 Hakam Singh Lodhi</span>
         </div>
       </div>
     </div>
