@@ -108,9 +108,10 @@ const Input: React.FC<InputProps> = ({ label, type, value, onChange, placeholder
         autoComplete={autoComplete}
         className="w-full rounded-xl px-4 py-3 text-sm font-medium text-slate-100 placeholder-slate-600 focus:outline-none transition-all duration-200 pr-11"
         style={{
-          background: 'rgba(15, 23, 42, 0.85)',
+          background: 'rgb(15, 23, 42)',
           border: '1px solid rgba(99, 102, 241, 0.2)',
           boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.4)',
+          colorScheme: 'dark',
         }}
         onFocus={e => {
           e.currentTarget.style.border = '1px solid rgba(99,102,241,0.7)';

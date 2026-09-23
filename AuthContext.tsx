@@ -7,6 +7,7 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   updateProfile,
+  reload,
   sendEmailVerification,
   sendPasswordResetEmail,
 } from 'firebase/auth';
@@ -46,6 +47,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cred = await createUserWithEmailAndPassword(auth, email, password);
     await updateProfile(cred.user, { displayName: displayName.trim() });
     await sendEmailVerification(cred.user);
+    // Force-reload so onAuthStateChanged re-fires with the updated displayName,
+    // ensuring App.tsx reads the correct name when seeding new-user settings.
+    await reload(cred.user);
+    setUser({ ...cred.user });
   };
 
   const signInWithEmail = async (email: string, password: string) => {
