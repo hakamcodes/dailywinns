@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Fonts ─────────────────────────────────────────────────── */
+body {
+  font-family: 'Inter', sans-serif;
+}
+
+.font-serif {
+  font-family: 'Playfair Display', serif;
+}
+
+/* ── Custom Animations ──────────────────────────────────────── */
+@keyframes pulse-slow {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.02); opacity: 0.9; }
+}
+
+@keyframes float-up-fade {
+  0% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(-50px); opacity: 0; }
+}
+
+/* ── Custom Scrollbar ───────────────────────────────────────── */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #dcdde1;
+  border-radius: 10px;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #475569;
+}
+
+/* ── Hide Scrollbar ─────────────────────────────────────────── */
+/* Chrome, Safari, Opera */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* IE, Edge, Firefox */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ── Print Styles ───────────────────────────────────────────── */
+@media print {
+  @page {
+    margin: 1.5cm;
+    size: A4;
+  }
+
+  body {
+    background-color: white !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-break-inside-avoid {
+    break-inside: avoid;
+  }
+
+  .print-page-break-before {
+    page-break-before: always;
+  }
+
+  .card {
+    border: 1px solid #e5e7eb !important;
+    box-shadow: none !important;
+    margin-bottom: 1rem;
+  }
+
+  .chart-container {
+    max-height: 400px;
+    width: 100% !important;
+  }
+}
