@@ -5,7 +5,7 @@
 
 **Track habits · Log your day · Build streaks · Earn points · Grow daily**
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-dailywinns.netlify.app-indigo?style=for-the-badge)](https://dailywinns.netlify.app)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-dailywinns.vercel.app-indigo?style=for-the-badge)](https://dailywinns.vercel.app)
 [![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey?style=for-the-badge)](LICENSE)
 [![Built with React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react)](https://react.dev)
 [![Firebase](https://img.shields.io/badge/Firebase-Firestore-FFCA28?style=for-the-badge&logo=firebase)](https://firebase.google.com)
@@ -133,5 +133,5 @@ This project is licensed under **CC BY-NC-ND 4.0** — you may view and share it
 ---
 
 <div align="center">
-  Built with focus and consistency · <a href="https://dailywinns.netlify.app">Try it live</a>
+  Built with focus and consistency · <a href="https://dailywinns.vercel.app">Try it live</a>
 </div>
